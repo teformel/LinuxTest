@@ -339,6 +339,32 @@ im2col 卷积（输入 1x64x224x224、核 64x64x3x3，每次跑 20 次前向）�
    这项比任何跑分都更能解释档 A 的数值差异。
 
 【第 4 步 · 磁盘与启动】
+
+■ 可比性前提（先读）
+若所有候选系统都装在**同一块外置 SSD** 上（本项目的做法），第 4 步是**有效的横向对比**——
+硬件、介质、接口全部相同，测出的差异就是发行版差异（内核 USB 存储驱动、I/O 调度器、
+默认挂载参数）。但**必须锁死以下变量**，否则测的是"接线方式"而不是"系统"：
+
+1. **同一个 USB 口 + 同一根线**。USB 3.2 Gen2（10Gbps）与 Gen1（5Gbps）差一倍，
+   插到 USB 2.0 口更是差一个数量级。报告中要写明接口（`lsusb -t` 看 5000M/10000M）。
+2. **必须记录 UASP 是否启用**，这是最关键的一项：
+     lsusb -t | grep -E 'Driver=(uas|usb-storage)'
+   - `uas` = USB Attached SCSI，正常高速路径
+   - `usb-storage` = 回退到 BOT 协议，**速度可能差 2–3 倍**
+   两个系统若一个 uas 一个 usb-storage，这是真实差异但**必须写明原因**，
+   不要笼统说"A 的磁盘比 B 快一倍"。
+3. **必须记录 I/O 调度器**：
+     cat /sys/block/<设备>/queue/scheduler
+   （多队列下常见 none / mq-deadline / bfq / kyber）
+   不同发行版默认值不同，这是真实差异，记录下来才有解释力。
+4. fio 一律加 `direct=1` 绕过 page cache；每个测试跑 3 次取中位数；
+   两次测试之间给 SSD 30 秒空闲（避免 pSLC 缓存未回收导致后跑的系统吃亏）。
+5. 测试文件大小建议 ≥ 4GB 或 `--runtime=60 --time_based`，避免整段跑在 SLC 缓存里。
+6. 报告中必须写明：
+   「本组数据代表<外置盘型号>经 USB 通路的性能，**跨系统排名可外推，绝对值不可外推**；
+     最终若改装内置 NVMe，需重测。」
+
+■ 执行条件
 若第 -1 步判定为 Live（含持久化），**跳过本步全部内容**，
 在报告对应小节写「未测量（原因：Live 环境下测量的是 USB 启动介质而非内置盘，数据无意义；
 需正式安装后重测）」，跳过后继续执行第 5 步。
@@ -347,11 +373,17 @@ im2col 卷积（输入 1x64x224x224、核 64x64x3x3，每次跑 20 次前向）�
 - systemd-analyze blame | head -15
 - 用 fio 测 4K 随机读（这是决定"系统/游戏能不能放外置盘"的关键）：
   fio --name=randread --ioengine=libaio --rw=randread --bs=4k --numjobs=4 \
-      --size=1G --runtime=60 --time_based --group_reporting \
+      --size=1G --runtime=60 --time_based --direct=1 --group_reporting \
       --directory=<用户指定的测试目录>
-  测试目录必须覆盖：根分区（内置盘）以及用户插入的任意外置盘挂载点。
+  测试目录必须覆盖：根分区（系统所在盘）以及用户插入的任意外置盘挂载点。
   两块盘都要测，报告中分开列。
-- 顺序读带宽：fio --name=seqread --rw=read --bs=1M --size=2G --runtime=60 --time_based --group_reporting --directory=<同上>
+- 顺序读带宽：fio --name=seqread --rw=read --bs=1M --size=2G --runtime=60 \
+      --time_based --direct=1 --group_reporting --directory=<同上>
+- 补充记录（各一行命令即可）：
+  lsblk -d -o NAME,SIZE,MODEL,TRAN / findmnt -no SOURCE,FSTYPE,OPTIONS /
+  lsusb -t | grep -E 'Driver=(uas|usb-storage)'
+  cat /sys/block/<根设备>/queue/scheduler
+  sudo fstrim -av 2>&1 | head -3   （记录 TRIM/discard 是否被外置盘支持；不支持会报错，属正常）
 
 【第 5 步 · 图形与游戏能力】
 
